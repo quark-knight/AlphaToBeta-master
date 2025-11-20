@@ -1,6 +1,5 @@
-# AlphaMut
-
-This is the GitHub Repository accompanying the paper: "AlphaMut: a deep reinforcement learning model to
+# AlphaToBeta
+This project is a continuation of the previous project from the CCB lab, which had produced the paper: "AlphaMut: a deep reinforcement learning model to
 suggest helix-disrupting mutations", published in the Journal of Chemical Theory and Computation. (J. Chem. Theory Comput. 2025, 21, 1, 463–473)
 https://pubs.acs.org/doi/10.1021/acs.jctc.4c01387 
 

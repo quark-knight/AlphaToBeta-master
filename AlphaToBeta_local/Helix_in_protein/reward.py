@@ -1,5 +1,6 @@
 import torch
-import os
+import os # for file operations
+import re # for sanitizing filenames
 import numpy as np 
 import biotite.structure as struc # biotite is used for secondary structure annotation
 import biotite.structure.io as strucio # for reading the PDB files
@@ -8,6 +9,7 @@ from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OF
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37 # OpenFold utils
 from datetime import datetime # to give unique names to files
 from biopandas.pdb import PandasPdb # to read the PDB files and get the B-factors
+from typing import Optional, Tuple # for type annotations and hinting
 from Helix_in_protein.sequence import * 
 
 
@@ -166,18 +168,6 @@ def percentage_of_secondary_structure(arr,secondary_structure_type,starting_resi
         return percentage_a, percentage_b
 
 
-def give_time_as_string():
-    '''
-    This function gives the current time as a string without spaces, useful for giving unique names to files
-    Returns:
-        str: Current time formatted as a string without spaces.
-    '''
-    current_time = datetime.now()
-    # Format the current time as a string without spaces
-    time_str = current_time.strftime("%Y-%m-%d_%H:%M:%S")
-    return time_str
-
-
 def plddt_value_of_helical_residues(structure_path, starting_residue, ending_residue)->float:
     '''
     This function takes in the path to a PDB file and gives back the fraction of residues in the specified range that have a pLDDT value >= 0.7
@@ -282,41 +272,42 @@ def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt
                 return 10
             else:
                 return -0.01
-        
+        ## The old reward structure (in AlphaMut code) was:
+        #  that -0.01 for not disrupting the helix,
+        #  -0.005 for disrupting partially, 
+        #  and 10 for disrupting completely.
 
-            # if helix_pct >=cutoff[0] and result_pct_got[1] >= cutoff[1] and result_plddt >= cutoff[2]: # 
-            #     return -0.01
-            # elif result_pct_got[0] >=cutoff[0] and result_pct_got[1] >= cutoff[1] and result_plddt >= cutoff[2]:
-            #     return -0.005
-            # else:
-            #     return 10
-    #     if usage_of_plddt == True:
-    #         pass
-    # else:
-    #     # result is just a single float
-    #     if usage_of_plddt == True:
-    #         if result_pct_got >=cutoff and result_plddt >= cutoff: # only if both plddt and helical content is greater than threshold. 
-    #             return -0.01
-    #         else:
-    #             return 10
-        
-    #     if usage_of_plddt == False:
-    #         if result_pct_got < cutoff:
-    #             return 10
-    #         else:
-    #             return -0.01
+def give_time_as_string():
+    '''
+    This function gives the current time as a string without spaces, useful for giving unique names to files
+    Returns:
+        str: Current time formatted as a string without spaces.
+    '''
+    current_time = datetime.now()
+    # Format the current time as a string without spaces
+    time_str = current_time.strftime("%Y-%m-%d_%H:%M:%S")
+    return time_str
+
+def sanitize_filename(name: str) -> str:
+    '''
+    Remove characters that are illegal in Windows/macOS/Linux filenames.
+    '''
+    # Remove: \ / : * ? " < > | and control characters
+    return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
+
+
     
-def reward_function(template_protein_structure_path,
-                    protein_sequence,
-                    reward_cutoff,
-                    unique_name_to_give,
-                    starting_residue_id,
-                    ending_residue_id,
-                    secondary_structure_type_from_env ='both',
-                    validation=False,
-                    folder_to_save_validation_files=None,
-                    use_plddt = False
-                    ):
+def reward_function(template_protein_structure_path:            str,
+                    protein_sequence:                           str,
+                    reward_cutoff:                              float | tuple[float, float],
+                    unique_name_to_give:                        str,
+                    starting_residue_id:                        int,
+                    ending_residue_id:                          int,
+                    secondary_structure_type_from_env:          str ='both',
+                    validation:                                 bool =False,
+                    folder_to_save_validation_files:            Optional[str]=None,
+                    use_plddt:                                  bool = False
+                    )-> float:
     '''
     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
     It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
@@ -335,10 +326,14 @@ def reward_function(template_protein_structure_path,
     Returns:
         float: Reward value based on the criteria.
     '''
-    if validation==False:
-        generate_structure_from_sequence(protein_sequence, name=f'NEW_{unique_name_to_give}')
 
-        path_of_the_newly_created_file = f'NEW_{unique_name_to_give}.pdb'
+    if validation==False:
+
+        # Sanitize filename to avoid illegal characters on any OS
+        safe_name = sanitize_filename(unique_name_to_give)
+        generate_structure_from_sequence(protein_sequence, name=f'NEW_{safe_name}')
+
+        path_of_the_newly_created_file = f'NEW_{safe_name}.pdb'
 
         resultant_a_and_b_percentage = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
                                                    secondary_structure_type=secondary_structure_type_from_env,
@@ -356,8 +351,21 @@ def reward_function(template_protein_structure_path,
         
     if validation == True:
         
-        template_file_base_name_without_extension = os.path.basename(template_protein_structure_path).split('.')[0]
-        base_path_to_give_for_file = f'{folder_to_save_validation_files}/{template_file_base_name_without_extension}_{give_time_as_string()}'
+        # Extract just the file name
+        template_filename = os.path.basename(template_protein_structure_path)
+        # Safely remove extension even if multiple dots exist
+        template_file_base_name_without_extension, _ = os.path.splitext(template_filename)
+        # Sanitize filename to avoid illegal characters on any OS
+        template_file_base_name_without_extension = sanitize_filename(template_file_base_name_without_extension)
+        # Case 1: If folder is None, default to current directory
+        folder = folder_to_save_validation_files or "."
+        # Create folder if needed
+        os.makedirs(folder, exist_ok=True)
+        # Add timestamp
+        timestamp = give_time_as_string()
+        # using  os.path.join for OS-safe path construction
+        base_path_to_give_for_file = os.path.join(folder,f"{template_file_base_name_without_extension}_{timestamp}")
+
 
         generate_structure_from_sequence(protein_sequence, name=base_path_to_give_for_file)
         path_of_the_newly_created_file = f'{base_path_to_give_for_file}.pdb'

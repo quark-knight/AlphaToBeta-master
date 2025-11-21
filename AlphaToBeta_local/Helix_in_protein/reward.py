@@ -10,7 +10,7 @@ from transformers.models.esm.openfold_utils.feats import atom14_to_atom37 # Open
 from datetime import datetime # to give unique names to files
 from biopandas.pdb import PandasPdb # to read the PDB files and get the B-factors
 from typing import Optional, Tuple # for type annotations and hinting
-from Helix_in_protein.sequence import * 
+# from Helix_in_protein.sequence import * # if needed in future
 
 
 # DEFINING THE MODEL FOR PROTEIN MODELLING
@@ -51,14 +51,11 @@ def convert_outputs_to_pdb(outputs):
             atom_positions=pred_pos,
             atom_mask=mask,
             residue_index=resid,
-            b_factors= b_fact, 
+            b_factors= b_fact,
             chain_index=chain_id,
         )
         pdbs.append(to_pdb(pred)) # Convert to PDB format string (contains the HEADER, MODEL, TER, END too along with atoms)
     return pdbs
-
-
-# In[4]:
 
 
 def generate_structure_from_sequence(sequence,name=None):
@@ -71,7 +68,7 @@ def generate_structure_from_sequence(sequence,name=None):
     Returns:
         None: The function saves the PDB file to the specified name.
     '''
-    
+
     # tokenizing the input sequence (one sequence at a time), outputs a dictionary with input_ids and attention_mask (required if padding is true) as keys
     # return_tensors="pt" gives the output in PyTorch tensor format (torch.LongTensor), other options are tf, np, jax, etc.
     # add_special_tokens=False, Prevents the tokenizer from inserting special tokens (BOS, EOS, CLS, SEP, etc), only the raw token IDs of the sequence are returned
@@ -204,7 +201,6 @@ def plddt_value_of_helical_residues(structure_path, starting_residue, ending_res
     return float(fraction_with_acceptable_plddt)
 
 
-
 def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt=False,)->float:
     '''
     Decide reward based on helix vs sheet content. It takes in a secondary stucture percentage cutoff and gives back the reward, 
@@ -296,7 +292,6 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
 
 
-    
 def reward_function(template_protein_structure_path:            str,
                     protein_sequence:                           str,
                     reward_cutoff:                              float | tuple[float, float],
@@ -326,7 +321,6 @@ def reward_function(template_protein_structure_path:            str,
     Returns:
         float: Reward value based on the criteria.
     '''
-
     if validation==False:
 
         # Sanitize filename to avoid illegal characters on any OS
@@ -365,8 +359,6 @@ def reward_function(template_protein_structure_path:            str,
         timestamp = give_time_as_string()
         # using  os.path.join for OS-safe path construction
         base_path_to_give_for_file = os.path.join(folder,f"{template_file_base_name_without_extension}_{timestamp}")
-
-
         generate_structure_from_sequence(protein_sequence, name=base_path_to_give_for_file)
         path_of_the_newly_created_file = f'{base_path_to_give_for_file}.pdb'
 

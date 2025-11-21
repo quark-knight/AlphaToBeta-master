@@ -6,7 +6,8 @@
 #################################################################################################
 
 import torch
-import os
+import os # for file operations
+import re # for sanitizing filenames
 import numpy as np 
 import biotite.structure as struc # biotite is used for secondary structure annotation
 import biotite.structure.io as strucio # for reading the PDB files
@@ -15,7 +16,9 @@ from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OF
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37 # OpenFold utils
 from datetime import datetime # to give unique names to files
 from biopandas.pdb import PandasPdb # to read the PDB files and get the B-factors
-from Helix_in_protein.sequence import * 
+from typing import Optional, Tuple # for type annotations and hinting
+# from Helix_in_protein.sequence import * # if needed in future
+
 
 # Amino acid mappings to used later if needed
 # Fixed 20-aa order
@@ -31,7 +34,7 @@ THREE_TO_ONE = {
 }
 
 # DEFINING THE MODEL FOR PROTEIN MODELLING
-torch.backends.cuda.matmul.allow_tf32 = True # Allow TF32 on matmul 
+torch.backends.cuda.matmul.allow_tf32 = True # Allow TF32 on matrix multiplications
 tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1") # ESM tokenizer 
 model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1") # ESM model for protein folding
 
@@ -45,9 +48,10 @@ def convert_outputs_to_pdb(outputs):
     """
     # Convert 14-atom representation to 37-atom representation, ["positions"][-1] to get the final, most refined structure
     # outputs["positions"][-1] gives a dict with shape (batch size, Number of residues, atom37 representation, 3)
+    # outputs is passed again to the function to get other required info ["aatype"] for conversion
     final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs) 
 
-    # Move tensors to CPU and convert to numpy arrays
+    # Move tensors to CPU and convert to numpy arrays [both conversion are equivalent]
     outputs = {k: v.to("cpu").numpy() for k, v in outputs.items()}
     final_atom_positions = final_atom_positions.cpu().numpy()
     final_atom_mask = outputs["atom37_atom_exists"]
@@ -59,7 +63,7 @@ def convert_outputs_to_pdb(outputs):
         pred_pos = final_atom_positions[i]          # (N_res, 37, 3)
         mask = final_atom_mask[i]                   # (N_res, 37)
         resid = outputs["residue_index"][i] + 1     # (N_res,) +1 to convert to 1-indexed
-        b_fact = outputs["plddt"][i]                # (N_res,)
+        b_fact = outputs["plddt"][i]                # (N_res,) pLDDT is embedded into the PDB’s B-factor column for later confidence checks
         chain_id = outputs["chain_index"][i] if "chain_index" in outputs else None # (N_res,) or None
         # Create OpenFold Protein object
         pred = OFProtein( 
@@ -70,23 +74,24 @@ def convert_outputs_to_pdb(outputs):
             b_factors= b_fact,
             chain_index=chain_id,
         )
-        pdbs.append(to_pdb(pred)) # Convert to PDB format string (contains the HEADER, MODEL, TER, END too along with atoms
+        pdbs.append(to_pdb(pred)) # Convert to PDB format string (contains the HEADER, MODEL, TER, END too along with atoms)
     return pdbs
-
-# In[4]:
 
 
 def generate_structure_from_sequence(sequence,name=None):
 
     '''
-    This function takes in the sequence of a protein and gives back the structure - this is the function where ESM Model is being used
+    This function takes in a single sequence of a protein and gives back the structure - this is the function where ESM Model is being used
     Args:
         sequence (str): Amino acid sequence of the protein.
         name (str): Name to save the PDB file as. If None, the PDB will not be saved to a file.
     Returns:
         None: The function saves the PDB file to the specified name.
     '''
+
     # tokenizing the input sequence (one sequence at a time), outputs a dictionary with input_ids and attention_mask (required if padding is true) as keys
+    # return_tensors="pt" gives the output in PyTorch tensor format (torch.LongTensor), other options are tf, np, jax, etc.
+    # add_special_tokens=False, Prevents the tokenizer from inserting special tokens (BOS, EOS, CLS, SEP, etc), only the raw token IDs of the sequence are returned
     tokenized_input = tokenizer([sequence], return_tensors="pt", add_special_tokens=False)['input_ids'] # (1, sequence length)
     # moving the input to GPU
     tokenized_input = tokenized_input.cuda()
@@ -99,7 +104,7 @@ def generate_structure_from_sequence(sequence,name=None):
 
     pdb = convert_outputs_to_pdb(output)
     with open(f"{name}.pdb", "w") as f:
-        f.write("".join(pdb))
+        f.write("".join(pdb)) #joining the list of strings into a single string and writing to file
     
 
 def get_structural_annotations(file_path)-> np.ndarray:
@@ -112,7 +117,7 @@ def get_structural_annotations(file_path)-> np.ndarray:
     """
     array = strucio.load_structure(file_path)
     sse = struc.annotate_sse(array, chain_id="A")
-    return sse
+    return sse # this will be an array of secondary structure annotations, eg. array(['a', 'a', 'a', 'c', 'b', 'b', 'c'], dtype='<U1')
 
 def percentage_of_secondary_structure(arr,secondary_structure_type,starting_residue,ending_residue):
         
@@ -126,44 +131,61 @@ def percentage_of_secondary_structure(arr,secondary_structure_type,starting_resi
     Returns:
         (float or tuple): Percentage of the specified secondary structure type(s) in the segment.
     '''
+    # Validate structure type
+    if secondary_structure_type not in ['helix', 'sheet', 'both']:
+        raise ValueError("secondary_structure_type must be 'helix', 'sheet', or 'both'")
     
+    # Validate residue indices
+    if not isinstance(starting_residue, int) or not isinstance(ending_residue, int):
+        raise TypeError("Residue indices must be integers")
+    
+    # validate non-negative indices
+    if starting_residue < 0 or ending_residue < 0:
+        raise ValueError("Residue indices must be non-negative")
+
+    # validate starting_residue <= ending_residue
+    if starting_residue > ending_residue:
+        raise ValueError("starting_residue must be <= ending_residue")
+
+    # validate ending_residue within array bounds
+    if ending_residue >= len(arr):
+        raise ValueError("ending_residue exceeds array length")
+    
+    # Validate input array
     if len(arr) == 0:
         raise ValueError("Input array must not be empty")
+    
     # this will count the number of amino acids that are part of a helix.
     # print(starting_residue,ending_residue)
     # print(len(arr))
-    arr = arr[starting_residue:ending_residue+1] # +1 because ending residue is inclusive   
-    total_elements = len(arr)
-    count_a = np.count_nonzero(arr == 'a')
+
+    # Extract the region (inclusive end)
+    segment = arr[starting_residue:ending_residue+1] # +1 because ending residue is inclusive   
+    total_elements = len(segment)
+
+    # avoiding divison by zero
+    if total_elements == 0:
+        raise ValueError("Selected residue segment is empty")
+    
+    # this will compute the number of amino acids that are part of a helix
+    count_a = np.count_nonzero(segment == 'a')
     percentage_a = (count_a / total_elements) * 100
 
     # this will compute the number of amino acids that are part of a sheet. 
-    count_b = np.count_nonzero(arr == 'b')
+    count_b = np.count_nonzero(segment == 'b')
     percentage_b = (count_b / total_elements) * 100
 
-    # if secondary_structure_type == 'helix':
-    #     return percentage_a
+    if secondary_structure_type == 'helix':
+        return percentage_a
 
-    # if secondary_structure_type == 'sheet':
-    #     return percentage_b
+    elif secondary_structure_type == 'sheet':
+        return percentage_b
 
-    if secondary_structure_type == 'both':
+    else:  # secondary_structure_type == 'both':
         return percentage_a, percentage_b
 
 
-
-def give_time_as_string():
-    '''
-    This function gives the current time as a string without spaces, useful for giving unique names to files
-    Returns:
-        str: Current time formatted as a string without spaces.
-    '''
-    current_time = datetime.now()
-    # Format the current time as a string without spaces
-    time_str = current_time.strftime("%Y-%m-%d_%H:%M:%S")
-    return time_str
-
-def plddt_value_of_helical_residues(structure_path, starting_residue, ending_residue):
+def plddt_value_of_helical_residues(structure_path, starting_residue, ending_residue)->float:
     '''
     This function takes in the path to a PDB file and gives back the fraction of residues in the specified range that have a pLDDT value >= 0.7
     Args:
@@ -175,13 +197,28 @@ def plddt_value_of_helical_residues(structure_path, starting_residue, ending_res
     '''
     # reading the PDB file using biopandas
     ppdb = PandasPdb().read_pdb(structure_path)
+    # filtering the dataframe to only include the relevant columns
     df = ppdb.df['ATOM']
-    condition = (df['residue_number']>=starting_residue+1) & (df['residue_number']<=ending_residue+1)
-    df = df[condition] # getting the rows corresponding to the interesting helix
+    # condition to get only the residues in the specified range (+1 because PDB files are 1-indexed)
+    mask = (df['residue_number']>=starting_residue+1) & (df['residue_number']<=ending_residue+1)
+    # getting the rows corresponding to the interesting helix
+    df = df[mask]
+
+    # If empty selection → avoid ZeroDivisionError
+    if df.empty:
+        return 0.0
+    
+    # calculating the average b-factor (pLDDT) for each residue 
     average_b_factors = df.groupby('residue_number')['b_factor'].mean().reset_index()
+
+    # If somehow no residues after grouping
+    if average_b_factors.empty:
+        return 0.0
+    
+    # calculating the fraction of residues with pLDDT >= 0.7
     threshold = 0.7 #?????????/ this cutoff is chosen based on alphafold website (but we are using from ESMFold which is a different model, so this might need to be changed)
     fraction_with_acceptable_plddt = len(average_b_factors[average_b_factors['b_factor']>= threshold])/len(average_b_factors)
-    return fraction_with_acceptable_plddt
+    return float(fraction_with_acceptable_plddt)
 
 
 def get_ca_table(pdb_path, chain_id='A'):
@@ -272,10 +309,9 @@ def count_aa_within_cutoff(pdb_path,
     return aa_counts
 
 
-
 def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt=False):
     '''
-    Decide reward based on helix vs sheet content. It takes in a reward cutoff and gives back the reward, 
+    Decide reward based on helix vs sheet content. It takes in a secondary stucture percentage cutoff and gives back the reward, 
     after looking at the result, which is the percentage content of the secondary structure. 
 
     Parameters
@@ -284,14 +320,14 @@ def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt
         Percentage of the specified secondary structure type in the segment.
     result_pct_got[0] : float
         Percentage of helix residues in the segment (0-100).
-    result_pct_got[0] : float
+    result_pct_got[1] : float
         Percentage of sheet residues in the segment (0-100).
+    result_plddt : float
+        Fraction of residues in the specified range with pLDDT >= 0.7
     cutoff : float, default=30
         Threshold for "too much sheet" / Reward cutoff percentage
     usage_of_plddt : bool
         Whether to consider pLDDT in the reward calculation.
-    result_plddt : float
-    Fraction of residues in the specified range with pLDDT >= 0.7
         NOTE: if helix_pct/sheet_pct are in 0-100 scale, set cutoff=70.0  
     Returns
     -------
@@ -306,36 +342,63 @@ def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt
             # Case 1: helix dominates
                 return -0.01
             elif sheet_pct > helix_pct and sheet_pct < cutoff:
-                # Case 2: sheet dominates but below cutoff
+            # Case 2: sheet dominates but below cutoff
                 return 0.01
             elif sheet_pct >= cutoff and sheet_pct > helix_pct:
-                # Case 3: sheet dominates and exceeds cutoff
+            # Case 3: sheet dominates and exceeds cutoff
                 return 10.0
             else:
-                # Edge case: tie or undefined
+            # Edge case: tie or undefined
                 return 0.0
-            
-            # if helix_pct >=cutoff[0] and result_pct_got[1] >= cutoff[1] and result_plddt >= cutoff[2]: # 
-            #     return -0.01
-            # elif result_pct_got[0] >=cutoff[0] and result_pct_got[1] >= cutoff[1] and result_plddt >= cutoff[2]:
-            #     return -0.005
-            # else:
-            #     return 10
-    #     if usage_of_plddt == True:
-    #         pass
-    # else:
-    #     # result is just a single float
-    #     if usage_of_plddt == True:
-    #         if result_pct_got >=cutoff and result_plddt >= cutoff: # only if both plddt and helical content is greater than threshold. 
-    #             return -0.01
-    #         else:
-    #             return 10
-        
-    #     if usage_of_plddt == False:
-    #         if result_pct_got < cutoff:
-    #             return 10
-    #         else:
-    #             return -0.01
+        if usage_of_plddt == True:
+            if helix_pct > sheet_pct and result_plddt >= cutoff:
+            # Case 1: helix dominates and pLDDT is acceptable
+                return -0.01
+            elif sheet_pct > helix_pct and sheet_pct < cutoff and result_plddt >= cutoff:
+            # Case 2: sheet dominates but below cutoff and pLDDT is acceptable
+                return 0.01
+            elif sheet_pct >= cutoff and sheet_pct > helix_pct and result_plddt >= cutoff:
+            # Case 3: sheet dominates and exceeds cutoff and pLDDT is acceptable
+                return 10.0
+            else:
+            # Edge case: tie or undefined or pLDDT not acceptable
+                return 0.0
+    else:
+        # result_pct_got is just a single float (helix % or sheet %). Also, this part is about 
+        # disrupting helix or sheet, that's why the reward logic is different
+        if usage_of_plddt == True:
+            if result_pct_got >=cutoff and result_plddt >= cutoff: # only if both plddt and helical content is greater than threshold. 
+                return -0.01
+            else:
+                return 10
+        if usage_of_plddt == False:
+            if result_pct_got < cutoff:
+                return 10
+            else:
+                return -0.01
+        ## The old reward structure (in AlphaMut code) was:
+        #  that -0.01 for not disrupting the helix,
+        #  -0.005 for disrupting partially, 
+        #  and 10 for disrupting completely.
+
+def give_time_as_string():
+    '''
+    This function gives the current time as a string without spaces, useful for giving unique names to files
+    Returns:
+        str: Current time formatted as a string without spaces.
+    '''
+    current_time = datetime.now()
+    # Format the current time as a string without spaces
+    time_str = current_time.strftime("%Y-%m-%d_%H:%M:%S")
+    return time_str
+
+def sanitize_filename(name: str) -> str:
+    '''
+    Remove characters that are illegal in Windows/macOS/Linux filenames.
+    '''
+    # Remove: \ / : * ? " < > | and control characters
+    return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
+
 def reward_function_with_env_counts(template_protein_structure_path,
                     protein_sequence,
                     reward_cutoff_sheet,
@@ -439,17 +502,17 @@ def reward_function_with_env_counts(template_protein_structure_path,
         
 
 
-def reward_function(template_protein_structure_path,
-                    protein_sequence,
-                    reward_cutoff,
-                    unique_name_to_give,
-                    starting_residue_id,
-                    ending_residue_id,
-                    secondary_structure_type_from_env ='both',
-                    validation=False,
-                    folder_to_save_validation_files=None,
-                    use_plddt = False
-                    ):
+def reward_function(template_protein_structure_path:            str,
+                    protein_sequence:                           str,
+                    reward_cutoff:                              float | tuple[float, float],
+                    unique_name_to_give:                        str,
+                    starting_residue_id:                        int,
+                    ending_residue_id:                          int,
+                    secondary_structure_type_from_env:          str ='both',
+                    validation:                                 bool =False,
+                    folder_to_save_validation_files:            Optional[str]=None,
+                    use_plddt:                                  bool = False
+                    )-> float:
     '''
     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
     It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
@@ -469,9 +532,12 @@ def reward_function(template_protein_structure_path,
         float: Reward value based on the criteria.
     '''
     if validation==False:
-        generate_structure_from_sequence(protein_sequence, name=f'NEW_{unique_name_to_give}')
 
-        path_of_the_newly_created_file = f'NEW_{unique_name_to_give}.pdb'
+        # Sanitize filename to avoid illegal characters on any OS
+        safe_name = sanitize_filename(unique_name_to_give)
+        generate_structure_from_sequence(protein_sequence, name=f'NEW_{safe_name}')
+
+        path_of_the_newly_created_file = f'NEW_{safe_name}.pdb'
 
         resultant_a_and_b_percentage = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
                                                    secondary_structure_type=secondary_structure_type_from_env,
@@ -489,9 +555,20 @@ def reward_function(template_protein_structure_path,
         
     if validation == True:
         
-        template_file_base_name_without_extension = os.path.basename(template_protein_structure_path).split('.')[0]
-        base_path_to_give_for_file = f'{folder_to_save_validation_files}/{template_file_base_name_without_extension}_{give_time_as_string()}'
-
+        # Extract just the file name
+        template_filename = os.path.basename(template_protein_structure_path)
+        # Safely remove extension even if multiple dots exist
+        template_file_base_name_without_extension, _ = os.path.splitext(template_filename)
+        # Sanitize filename to avoid illegal characters on any OS
+        template_file_base_name_without_extension = sanitize_filename(template_file_base_name_without_extension)
+        # Case 1: If folder is None, default to current directory
+        folder = folder_to_save_validation_files or "."
+        # Create folder if needed
+        os.makedirs(folder, exist_ok=True)
+        # Add timestamp
+        timestamp = give_time_as_string()
+        # using  os.path.join for OS-safe path construction
+        base_path_to_give_for_file = os.path.join(folder,f"{template_file_base_name_without_extension}_{timestamp}")
         generate_structure_from_sequence(protein_sequence, name=base_path_to_give_for_file)
         path_of_the_newly_created_file = f'{base_path_to_give_for_file}.pdb'
 

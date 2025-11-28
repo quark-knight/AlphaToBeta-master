@@ -86,6 +86,15 @@ def generate_structure_from_sequence(sequence,name=None):
     with open(f"{name}.pdb", "w") as f:
         f.write("".join(pdb)) #joining the list of strings into a single string and writing to file
     
+    ## Alternative way to save PDBs seperately if needed in future
+    # for i, pdb_string in enumerate(pdbs):
+    #     # If you gave the model only one sequence, this loop runs once.
+    #     # If you gave a batch, it runs once per sequence.
+    #     filename = f"{name}_{i}.pdb" if len(pdbs) > 1 else f"{name}.pdb"
+    #     with open(filename, "w") as f:
+    #         f.write(pdb_string)
+
+    #     print(f"Saved: {filename}")
 
 def get_structural_annotations(file_path)-> np.ndarray:
     """

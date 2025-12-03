@@ -8,6 +8,7 @@
 import torch
 import os # for file operations
 import re # for sanitizing filenames
+import csv # for writing/reading amino acid frequency to a csv file 
 import numpy as np 
 import biotite.structure as struc # biotite is used for secondary structure annotation
 import biotite.structure.io as strucio # for reading the PDB files
@@ -18,7 +19,6 @@ from datetime import datetime # to give unique names to files
 from biopandas.pdb import PandasPdb # to read the PDB files and get the B-factors
 from typing import Optional, Tuple # for type annotations and hinting
 # from Helix_in_protein.sequence import * # if needed in future
-
 
 # Amino acid mappings to used later if needed
 # Fixed 20-aa order
@@ -32,6 +32,13 @@ THREE_TO_ONE = {
     'HIS':'H','ILE':'I','LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P','SER':'S',
     'THR':'T','TRP':'W','TYR':'Y','VAL':'V'
 }
+
+# --- GLOBALS THAT PERSIST ONLY DURING ONE TRAINING RUN ---
+EPISODE_COUNTER = 0
+CUMULATIVE_HIST = np.zeros(20, dtype=int)
+HISTOGRAM_CSV_PATH = None
+TOTAL_EPISODES = None          # RL training will pass this value
+# ----------------------------------------------------------
 
 # DEFINING THE MODEL FOR PROTEIN MODELLING
 torch.backends.cuda.matmul.allow_tf32 = True # Allow TF32 on matrix multiplications
@@ -358,28 +365,26 @@ def count_aa_within_cutoff(pdb_path,
     return aa_counts
 
 
-def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt=False):
+def get_reward_from_resultant_pct(result_pct_got, result_plddt,cutoff=70,usage_of_plddt=False)->float:
     '''
     Decide reward based on helix vs sheet content. It takes in a secondary stucture percentage cutoff and gives back the reward, 
     after looking at the result, which is the percentage content of the secondary structure. 
 
-    Parameters
-    ----------
-    result_pct_got : float or tuple
-        Percentage of the specified secondary structure type in the segment.
-    result_pct_got[0] : float
-        Percentage of helix residues in the segment (0-100).
-    result_pct_got[1] : float
-        Percentage of sheet residues in the segment (0-100).
-    result_plddt : float
-        Fraction of residues in the specified range with pLDDT >= 0.7
-    cutoff : float, default=30
-        Threshold for "too much sheet" / Reward cutoff percentage
-    usage_of_plddt : bool
-        Whether to consider pLDDT in the reward calculation.
-        NOTE: if helix_pct/sheet_pct are in 0-100 scale, set cutoff=70.0  
-    Returns
-    -------
+    Args:
+        result_pct_got : float or tuple
+            Percentage of the specified secondary structure type in the segment.
+        result_pct_got[0] : float
+            Percentage of helix residues in the segment (0-100).
+        result_pct_got[1] : float
+            Percentage of sheet residues in the segment (0-100).
+        result_plddt : float
+            Fraction of residues in the specified range with pLDDT >= 0.7
+        cutoff : float, default=30
+            Threshold for "too much sheet" / Reward cutoff percentage
+        usage_of_plddt : bool
+            Whether to consider pLDDT in the reward calculation.
+            NOTE: if helix_pct/sheet_pct are in 0-100 scale, set cutoff=70.0  
+    Returns:
         float: Reward value based on the criteria.
     '''
     if isinstance(result_pct_got, tuple):
@@ -419,10 +424,10 @@ def get_reward_from_result(result_pct_got, result_plddt,cutoff=70,usage_of_plddt
             if result_pct_got >=cutoff and result_plddt >= cutoff: # only if both plddt and helical content is greater than threshold. 
                 return -0.01
             else:
-                return 10
+                return 10.0
         if usage_of_plddt == False:
             if result_pct_got < cutoff:
-                return 10
+                return 10.0
             else:
                 return -0.01
         ## The old reward structure (in AlphaMut code) was:
@@ -448,162 +453,65 @@ def sanitize_filename(name: str) -> str:
     # Remove: \ / : * ? " < > | and control characters
     return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
 
-def reward_function_with_env_counts(template_protein_structure_path,
-                    protein_sequence,
-                    reward_cutoff_sheet,
-                    unique_name_to_give,
-                    starting_residue_id,
-                    ending_residue_id,
-                    secondary_structure_type_from_env ='both',
-                    validation=False,
-                    folder_to_save_validation_files=None,
-                    use_plddt = False,
-                    distance_cutoff=6.0,
-                    chain_id='A',
-):
+def reward_function_with_env_counts( protein_sequence:                               str,
+                                    reward_cutoff_sheet:                            float| tuple[float, float],
+                                    unique_name_to_give:                            str,
+                                    starting_residue_id:                            int,
+                                    ending_residue_id:                              int,
+                                    template_protein_structure_path:                str,
+                                    secondary_structure_type_from_env:              str ='both',
+                                    validation:                                     bool =False,
+                                    folder_to_save_validation_files:                Optional[str]=None,
+                                    use_plddt:                                      bool = False,
+                                    distance_cutoff:                                float=6.0,
+                                    chain_id:                                       str='A',
+                                    total_episodes:                                 int | None = None
+)-> Tuple[float, Optional[np.ndarray]]:
     '''
     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
     It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
-    This is called by the (gym) environment class to evaluate the rewards and is the most computationally expensive part
+    This is called by the (gym) environment class to evaluate the rewards and is the most computationally expensive part. 
+
+    NOTE: In addition to calculating the reward, the added part here is that if the sheet content dominates helix content, it fills a length-20 array with counts 
+          of amino acids in the neighborhood of the segment. It then creates a CSV file to store the cumulative histogram of amino acids across all episodes.
     Args:
-        template_protein_structure_path (str): Path to the template protein structure file (used only in validation mode).
         protein_sequence (str): Amino acid sequence of the protein.
         reward_cutoff (float or tuple): Reward cutoff percentage.
         unique_name_to_give (str): Unique name to save the generated PDB file.
         starting_residue_id (int): Starting residue index (0-based) for the segment of interest.
         ending_residue_id (int): Ending residue index (0-based) for the segment of interest.
+        template_protein_structure_path (str): Path to the template protein structure file (used only in validation mode).
         secondary_structure_type_from_env (str): Type of secondary structure to calculate percentage for. Options are 'helix', 'sheet', or 'both'. Default is 'helix'.
         validation (bool): Whether to run in validation mode (saves files in a specified folder). Default is False.
         folder_to_save_validation_files (str): Folder path to save validation files (used only in validation mode).
         use_plddt (bool): Whether to consider pLDDT in the reward calculation. Default is False.
         distance_cutoff (float): Distance cutoff in Angstroms to consider neighboring residues. Default is 6.0.
         chain_id (str): Chain identifier in the PDB file. Default is 'A'.
+        total_episodes (int or None): Total number of episodes for RL training (used for logging purposes). Default is None.
 
     Returns: (reward, aa_counts_or_none)
         float: Reward value based on the criteria.
         aa_counts_or_none is a length-20 array if sheet dominates, else None.
     '''
-    # 1) Predict structure -> write PDB
-    if not validation:
+    # --- ACCESS GLOBALS ---
+    global EPISODE_COUNTER, CUMULATIVE_HIST, HISTOGRAM_CSV_PATH, TOTAL_EPISODES
+
+    # 0) On first call, store total episodes
+    if TOTAL_EPISODES is None and total_episodes is not None:
+        TOTAL_EPISODES = total_episodes
+    #Increment episode counter
+    EPISODE_COUNTER += 1
+    episode = EPISODE_COUNTER
+
+    # 1) Generate the structure using ESM and write into a PDB file
+    if not validation: # Non-validation naming logic
         name = f'NEW_{unique_name_to_give}'
-        generate_structure_from_sequence(protein_sequence, name=name)
-        structure_path = f"{name}.pdb"
-    else:
-        #Validation naming logic with timestamp
-        base = os.path.splitext(os.path.basename(template_protein_structure_path))[0]
-        timestamp = give_time_as_string()
-        outdir = folder_to_save_validation_files or "."
-        os.makedirs(outdir, exist_ok=True)
-        name = f"{base}_{timestamp}"
-        structure_path = os.path.join(outdir, f"{name}.pdb")
-        generate_structure_from_sequence(protein_sequence, name=os.path.join(outdir, name))
-    
-    try:
-        # 2) Compute helix/sheet %
-        sse_arr = get_structural_annotations(structure_path)  # your existing function (chain A)
-        helix_pct, sheet_pct = percentage_of_secondary_structure(
-            sse_arr, 'both', starting_residue_id, ending_residue_id
-        )
-
-        # Optional: pLDDT gate if you still want it (not required for the array logic)
-        if use_plddt:
-            frac_conf = plddt_value_of_helical_residues(
-                structure_path, starting_residue_id, ending_residue_id
-            )
-            # We can weave frac_conf into our final reward if desired.
-
-        # 3) Reward based on helix vs sheet
-        reward = get_reward_from_result(
-            helix_pct, sheet_pct, cutoff_sheet=reward_cutoff_sheet
-        )
-
-        # 4) If sheet dominates, fill the 20-aa frequency array from neighborhood
-        aa_counts = None
-        if sheet_pct > helix_pct:
-            aa_counts = count_aa_within_cutoff(
-                structure_path,
-                start_idx_0based=starting_residue_id,
-                end_idx_0based=ending_residue_id,
-                cutoff_angstrom=distance_cutoff,
-                chain_id=chain_id,
-                exclude_segment=True
-            )
-
-        # 5) Cleanup policy (match our previous behavior)
-        if not validation:
-            # Always remove in non-validation mode
-            if os.path.exists(structure_path):
-                os.remove(structure_path)
-        else:
-            # In validation mode, keep only if "bad" (we can invert if we want)
-            if reward < 10 and os.path.exists(structure_path):
-                os.remove(structure_path)
-
-        return reward, aa_counts
-
-    finally:
-        # Ensure cleanup if something goes wrong and we're not validating
-        if not validation and os.path.exists(structure_path):
-            try:
-                os.remove(structure_path)
-            except Exception:
-                pass
-        
-
-
-def reward_function(template_protein_structure_path:            str,
-                    protein_sequence:                           str,
-                    reward_cutoff:                              float | tuple[float, float],
-                    unique_name_to_give:                        str,
-                    starting_residue_id:                        int,
-                    ending_residue_id:                          int,
-                    secondary_structure_type_from_env:          str ='both',
-                    validation:                                 bool =False,
-                    folder_to_save_validation_files:            Optional[str]=None,
-                    use_plddt:                                  bool = False
-                    )-> float:
-    '''
-    This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
-    It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
-    This is called by the (gym) environment class to evaluate the rewards and is the most computationally expensive part
-    Args:
-        template_protein_structure_path (str): Path to the template protein structure file (used only in validation mode).
-        protein_sequence (str): Amino acid sequence of the protein.
-        reward_cutoff (float or tuple): Reward cutoff percentage.
-        unique_name_to_give (str): Unique name to save the generated PDB file.
-        starting_residue_id (int): Starting residue index (0-based) for the segment of interest.
-        ending_residue_id (int): Ending residue index (0-based) for the segment of interest.
-        secondary_structure_type_from_env (str): Type of secondary structure to calculate percentage for. Options are 'helix', 'sheet', or 'both'. Default is 'helix'.
-        validation (bool): Whether to run in validation mode (saves files in a specified folder). Default is False.
-        folder_to_save_validation_files (str): Folder path to save validation files (used only in validation mode).
-        use_plddt (bool): Whether to consider pLDDT in the reward calculation. Default is False.
-    Returns:
-        float: Reward value based on the criteria.
-    '''
-    if validation==False:
-
         # Sanitize filename to avoid illegal characters on any OS
         safe_name = sanitize_filename(unique_name_to_give)
-        generate_structure_from_sequence(protein_sequence, name=f'NEW_{safe_name}')
-
-        path_of_the_newly_created_file = f'NEW_{safe_name}.pdb'
-
-        resultant_a_and_b_percentage = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
-                                                   secondary_structure_type=secondary_structure_type_from_env,
-                                                   starting_residue = starting_residue_id,
-                                                   ending_residue = ending_residue_id) # here the starting and ending residues are also taken into account.
+        generate_structure_from_sequence(protein_sequence, name=f'NEW_{safe_name}') 
+        path_to_the_predicted_sturcture_file = f'NEW_{safe_name}.pdb'
         
-        result_from_plddt = plddt_value_of_helical_residues(structure_path = path_of_the_newly_created_file, 
-                                                            starting_residue = starting_residue_id, 
-                                                            ending_residue = ending_residue_id)
-        reward = get_reward_from_result(result_pct_got=resultant_a_and_b_percentage,result_plddt=result_from_plddt,cutoff=reward_cutoff,usage_of_plddt=use_plddt)
-
-        os.remove(path_of_the_newly_created_file)
-        return reward
-
-        
-    if validation == True:
-        
+    else: # Validation naming logic with timestamp
         # Extract just the file name
         template_filename = os.path.basename(template_protein_structure_path)
         # Safely remove extension even if multiple dots exist
@@ -619,18 +527,183 @@ def reward_function(template_protein_structure_path:            str,
         # using  os.path.join for OS-safe path construction
         base_path_to_give_for_file = os.path.join(folder,f"{template_file_base_name_without_extension}_{timestamp}")
         generate_structure_from_sequence(protein_sequence, name=base_path_to_give_for_file)
-        path_of_the_newly_created_file = f'{base_path_to_give_for_file}.pdb'
+        path_to_the_predicted_sturcture_file = f'{base_path_to_give_for_file}.pdb'
+    
+    try:
+    # 2) Compute helix vs sheet percentage and optionally sturcture above plDDT >= 0.7
+        secondaary_structure_annotations = get_structural_annotations(path_to_the_predicted_sturcture_file)
+        resultant_a_and_b_percentage = percentage_of_secondary_structure(secondaary_structure_annotations,
+                                                                         secondary_structure_type=secondary_structure_type_from_env,
+                                                                         starting_residue = starting_residue_id,
+                                                                         ending_residue = ending_residue_id) 
+                                                                         # here the starting and ending residues are also taken into account.
+        # Unpack percentages to be used if needed
+        if isinstance(resultant_a_and_b_percentage, tuple):
+            helix_pct, sheet_pct = resultant_a_and_b_percentage
+        else:
+            helix_or_sheet_pct = resultant_a_and_b_percentage
 
-        result = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
-                                                   secondary_structure_type=secondary_structure_type_from_env,
-                                                   starting_residue = starting_residue_id,
-                                                   ending_residue = ending_residue_id) # here the starting and ending residues are also taken into account.
+        # Optional: Calculates the fraction of residues in plDDT >= 0.7 only if the use_plddt flag is True
+        if use_plddt:
+            results_above_plddt_limit = plddt_value_of_helical_residues(structure_path= path_to_the_predicted_sturcture_file, 
+                                                                        starting_residue_id=starting_residue_id, 
+                                                                        ending_residue_id=ending_residue_id)
+            # Calculates the fraction of residues in plDDT >= 0.7 only if the use_plddt flag is True
+
+    # 3) Reward based on helix vs sheet
+        reward = get_reward_from_resultant_pct(helix_or_sheet_pct,
+                                               result_plddt=results_above_plddt_limit,
+                                               cutoff_sheet=reward_cutoff_sheet)
+
+    # 4) If sheet dominates, fill the 20-aa frequency array from neighborhood
+        aa_counts = None
+        if sheet_pct > helix_pct:
+            aa_counts = count_aa_within_cutoff(path_to_the_predicted_sturcture_file,
+                                               start_idx_0based=starting_residue_id,
+                                               end_idx_0based=ending_residue_id,
+                                               cutoff_angstrom=distance_cutoff,
+                                               chain_id=chain_id,
+                                               exclude_segment=True)
+
+    # 5) Cleanup policy: if not validation, always remove; if validation, remove only "bad" structures
+        if not validation:
+            # Always remove in non-validation mode
+            if os.path.exists(path_to_the_predicted_sturcture_file):
+                os.remove(path_to_the_predicted_sturcture_file)
+        else:
+            # In validation mode, keep only if "bad" (we can invert if we want)
+            if reward < 10 and os.path.exists(path_to_the_predicted_sturcture_file):
+                os.remove(path_to_the_predicted_sturcture_file)
+
+    # Optional: catch exceptions for debugging/logging
+    except Exception as e:
+    # optional: log/print the error for debugging
+    # print(f"Error in reward computation: {e}")
+        raise  # re-raise or handle as needed
+    
+    # Optional: ensure cleanup in case of unexpected errors in non-validation mode
+    finally:
+        # Ensure cleanup if something goes wrong and we're not validating
+        if not validation and os.path.exists(path_to_the_predicted_sturcture_file):
+            try:
+                os.remove(path_to_the_predicted_sturcture_file)
+            except Exception:
+                pass
+    
+    # 6) If aa_counts is filled, update cumulative histogram and save to CSV
+    if aa_counts is not None:
+        # 1) If it is the First episode → create new unique CSV file
+        if HISTOGRAM_CSV_PATH is None:
+            hist_name= f"histogram_{unique_name_to_give}_{timestamp}.csv"
+
+            HISTOGRAM_CSV_PATH = os.path.join(folder, hist_name)
+            # Create CSV and write header
+            with open(HISTOGRAM_CSV_PATH, mode='w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["episode"] + AA_ORDER)  # Header row
+
+        # 2) Append current episode's aa_counts to CSV
+        with open(HISTOGRAM_CSV_PATH, mode='w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow([episode] + aa_counts.tolist())
+
+        # 3) Update cumulative histogram
+        CUMULATIVE_HIST += aa_counts
+
+        # 4) If this is the FINAL episode, append cumulative row to CSV
+        if TOTAL_EPISODES is not None and episode == TOTAL_EPISODES:
+            with open(HISTOGRAM_CSV_PATH, "a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["cumulative"] + CUMULATIVE_HIST.tolist())
+                
+    # 7) Return reward and aa_counts (if any)
+    return reward, aa_counts
+
+
+
+
+
+## Old function without environment counts (kept for reference)
+# def reward_function(template_protein_structure_path:            str,
+#                     protein_sequence:                           str,
+#                     reward_cutoff:                              float | tuple[float, float],
+#                     unique_name_to_give:                        str,
+#                     starting_residue_id:                        int,
+#                     ending_residue_id:                          int,
+#                     secondary_structure_type_from_env:          str ='both',
+#                     validation:                                 bool =False,
+#                     folder_to_save_validation_files:            Optional[str]=None,
+#                     use_plddt:                                  bool = False
+#                     )-> float:
+#     '''
+#     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
+#     It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
+#     This is called by the (gym) environment class to evaluate the rewards and is the most computationally expensive part
+#     Args:
+#         template_protein_structure_path (str): Path to the template protein structure file (used only in validation mode).
+#         protein_sequence (str): Amino acid sequence of the protein.
+#         reward_cutoff (float or tuple): Reward cutoff percentage.
+#         unique_name_to_give (str): Unique name to save the generated PDB file.
+#         starting_residue_id (int): Starting residue index (0-based) for the segment of interest.
+#         ending_residue_id (int): Ending residue index (0-based) for the segment of interest.
+#         secondary_structure_type_from_env (str): Type of secondary structure to calculate percentage for. Options are 'helix', 'sheet', or 'both'. Default is 'helix'.
+#         validation (bool): Whether to run in validation mode (saves files in a specified folder). Default is False.
+#         folder_to_save_validation_files (str): Folder path to save validation files (used only in validation mode).
+#         use_plddt (bool): Whether to consider pLDDT in the reward calculation. Default is False.
+#     Returns:
+#         float: Reward value based on the criteria.
+#     '''
+#     if validation==False:
+
+#         # Sanitize filename to avoid illegal characters on any OS
+#         safe_name = sanitize_filename(unique_name_to_give)
+#         generate_structure_from_sequence(protein_sequence, name=f'NEW_{safe_name}')
+
+#         path_of_the_newly_created_file = f'NEW_{safe_name}.pdb'
+
+#         resultant_a_and_b_percentage = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
+#                                                    secondary_structure_type=secondary_structure_type_from_env,
+#                                                    starting_residue = starting_residue_id,
+#                                                    ending_residue = ending_residue_id) # here the starting and ending residues are also taken into account.
         
-        result_from_plddt = plddt_value_of_helical_residues(structure_path = path_of_the_newly_created_file,
-                                                            starting_residue = starting_residue_id,
-                                                            ending_residue = ending_residue_id) # this is to obtain the fraction of residues that have a plddt >= 0.7 
-        reward = get_reward_from_result(result_got=result,result_plddt=result_from_plddt,cutoff=reward_cutoff,usage_of_plddt=use_plddt)
+#         result_from_plddt = plddt_value_of_helical_residues(structure_path = path_of_the_newly_created_file, 
+#                                                             starting_residue = starting_residue_id, 
+#                                                             ending_residue = ending_residue_id)
+#         reward = get_reward_from_resultant_pct(result_pct_got=resultant_a_and_b_percentage,result_plddt=result_from_plddt,cutoff=reward_cutoff,usage_of_plddt=use_plddt)
 
-        if int(reward)<10:
-            os.remove(path_of_the_newly_created_file)
-        return reward
+#         os.remove(path_of_the_newly_created_file)
+#         return reward
+
+        
+#     if validation == True:
+        
+#         # Extract just the file name
+#         template_filename = os.path.basename(template_protein_structure_path)
+#         # Safely remove extension even if multiple dots exist
+#         template_file_base_name_without_extension, _ = os.path.splitext(template_filename)
+#         # Sanitize filename to avoid illegal characters on any OS
+#         template_file_base_name_without_extension = sanitize_filename(template_file_base_name_without_extension)
+#         # Case 1: If folder is None, default to current directory
+#         folder = folder_to_save_validation_files or "."
+#         # Create folder if needed
+#         os.makedirs(folder, exist_ok=True)
+#         # Add timestamp
+#         timestamp = give_time_as_string()
+#         # using  os.path.join for OS-safe path construction
+#         base_path_to_give_for_file = os.path.join(folder,f"{template_file_base_name_without_extension}_{timestamp}")
+#         generate_structure_from_sequence(protein_sequence, name=base_path_to_give_for_file)
+#         path_of_the_newly_created_file = f'{base_path_to_give_for_file}.pdb'
+
+#         result = percentage_of_secondary_structure(get_structural_annotations(path_of_the_newly_created_file),
+#                                                    secondary_structure_type=secondary_structure_type_from_env,
+#                                                    starting_residue = starting_residue_id,
+#                                                    ending_residue = ending_residue_id) # here the starting and ending residues are also taken into account.
+        
+#         result_from_plddt = plddt_value_of_helical_residues(structure_path = path_of_the_newly_created_file,
+#                                                             starting_residue = starting_residue_id,
+#                                                             ending_residue = ending_residue_id) # this is to obtain the fraction of residues that have a plddt >= 0.7 
+#         reward = get_reward_from_resultant_pct(result_got=result,result_plddt=result_from_plddt,cutoff=reward_cutoff,usage_of_plddt=use_plddt)
+
+#         if int(reward)<10:
+#             os.remove(path_of_the_newly_created_file)
+#         return reward

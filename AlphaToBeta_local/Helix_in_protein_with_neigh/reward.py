@@ -22,15 +22,22 @@ from typing import Optional, Tuple # for type annotations and hinting
 
 # Amino acid mappings to used later if needed
 # Fixed 20-aa order
-AA_ORDER = ['A','R','N','D','C','Q','E','G','H','I',
-            'L','K','M','F','P','S','T','W','Y','V']
-AA_TO_IDX = {aa: i for i, aa in enumerate(AA_ORDER)}
+AA_ORDER = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 
+            'M', 'N', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y', 'P']
+
+# AA_ORDER = ['A','R','N','D','C','Q','E','G','H','I',
+#             'L','K','M','F','P','S','T','W','Y','V']
+
+AA_TO_IDX = {aa: idx for idx, aa in enumerate(AA_ORDER)}
 
 # 3-letter -> 1-letter map (PDB residue names)
 THREE_TO_ONE = {
-    'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C','GLN':'Q','GLU':'E','GLY':'G',
-    'HIS':'H','ILE':'I','LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P','SER':'S',
-    'THR':'T','TRP':'W','TYR':'Y','VAL':'V'
+    # 'ALA':'A','ARG':'R','ASN':'N','ASP':'D','CYS':'C','GLN':'Q','GLU':'E','GLY':'G',
+    # 'HIS':'H','ILE':'I','LEU':'L','LYS':'K','MET':'M','PHE':'F','PRO':'P','SER':'S',
+    # 'THR':'T','TRP':'W','TYR':'Y','VAL':'V',
+    'ALA':'A','CYS':'C','ASP':'D','GLU':'E','PHE':'F','GLY':'G','HIS':'H','ILE':'I',
+    'LYS':'K','LEU':'L','MET':'M','ASN':'N','GLN':'Q','ARG':'R','SER':'S','THR':'T',
+    'VAL':'V','TRP':'W','TYR':'Y','PRO':'P'
 }
 
 # --- GLOBALS THAT PERSIST ONLY DURING ONE TRAINING RUN ---
@@ -453,7 +460,7 @@ def sanitize_filename(name: str) -> str:
     # Remove: \ / : * ? " < > | and control characters
     return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
 
-def reward_function_with_env_counts( protein_sequence:                               str,
+def reward_function_with_env_counts(protein_sequence:                               str,
                                     reward_cutoff_sheet:                            float| tuple[float, float],
                                     unique_name_to_give:                            str,
                                     starting_residue_id:                            int,
@@ -471,7 +478,7 @@ def reward_function_with_env_counts( protein_sequence:                          
     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.
     It generates the structure from the sequence using ESM model, annotates the secondary structure using biotite, and calculates the reward based on the criteria.
     This is called by the (gym) environment class to evaluate the rewards and is the most computationally expensive part. 
-
+    
     NOTE: In addition to calculating the reward, the added part here is that if the sheet content dominates helix content, it fills a length-20 array with counts 
           of amino acids in the neighborhood of the segment. It then creates a CSV file to store the cumulative histogram of amino acids across all episodes.
     Args:

@@ -1,3 +1,4 @@
+# This file contains functions to encode and decode protein sequences and convert them to embeddings.
 import numpy as np
 # import biovec
 from transformers import AutoTokenizer,EsmModel
@@ -12,10 +13,9 @@ def protein_to_indices(protein_sequence):
     this is a dummy function needed in the reinforcement learning model. converts each amino acid into a number between 1 and 20.
     '''
     # Define the mapping of amino acids to indices
-
     amino_acids = "ACDEFGHIKLMNQRSTVWYP"
+
     # this has been verified manually to correspond to the single letter amino acids
-    
     amino_acid_indices = {aa: idx for idx, aa in enumerate(amino_acids, 1)}
 
     # Convert the protein sequence to a list of indices

@@ -1,8 +1,9 @@
+# Environment class for helix in protein with neighborhood context, using Gymnasium, PyTorch, and NumPy.
 import torch
 import numpy as np
-from Helix_in_protein.encoder_decoder import *
-from Helix_in_protein.sequence import *
-from Helix_in_protein.reward import *
+from Helix_in_protein_with_neigh.encoder_decoder import *
+from Helix_in_protein_with_neigh.sequence import *
+from Helix_in_protein_with_neigh.reward import *
 from gymnasium import Env
 from gymnasium.spaces import Discrete
 from gymnasium.spaces import Box
@@ -14,17 +15,16 @@ import glob
 
 class ProteinEvolution(Env):
     '''
-    Class for the helix breaker with the entire protein
-    ------------
-    :param file_containing_sequence_database: csv file containing the dataset of sequences to choose from
-    :param protein_length_limit: maximum length of the protein to consider for training
-    :param folder_to_save_validation_files: folder to save the validation files
-    :param reward_cutoff: reward cutoff to determine when to stop the mutation
-    :param unique_path_to_give_for_file: unique path to give for the file to avoid overwriting
-    :param sequence_encoding_type: type of sequence encoding to use (esm or biovec)
-    :param secondary_structure_to_disrupt: secondary structure to disrupt (default is helix)
-    :param maximum_number_of_allowed_mutations_per_episode: maximum number of mutations allowed per episode (default is 15)
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages, 2 for debug messages
+    Class for the helix evolution with the entire protein sequence context environment.
+    -------    
+    Inherits from:
+        Env (gymnasium.Env): Base class for all Gymnasium environments.
+    -------
+    Methods:
+        __init__: Initializes the environment with given parameters.
+        step: Takes an action and returns the new state, reward, termination status, and info.
+        render: Renders the environment (not implemented).
+        reset: Resets the environment to the initial state.
     '''
     def __init__(self,
                  file_containing_sequence_database, # this is to replace the earlier code that required that you have a folder. 
@@ -33,16 +33,35 @@ class ProteinEvolution(Env):
                  reward_cutoff,
                  unique_path_to_give_for_file,
                  sequence_encoding_type,
-                 secondary_structure_to_disrupt: str ='helix',
+                 secondary_structure_to_disrupt: str ='both',
                  maximum_number_of_allowed_mutations_per_episode: int =15,
                  validation=False,
                  use_proline=True,
-                 use_plddt_in_reward = False):
+                 use_plddt_in_reward = False,
+                 distance_cutoff=6.0,
+                 chain_id='A',
+                 total_episodes=None):
                 '''
                 This part initialises the environment - give the arguements such as what is the corpus of structures that you'd like to train on,
                 reward cutoff, maximum number of mutations allowed per episode, unique path to give for training file, etc. 
-                '''
 
+                Attributes:
+                    file_containing_sequence_database: csv file containing the dataset of sequences to choose from
+                    protien_length_limit(int): maximum length of the protein to consider for training
+                    folder_to_save_validation_files: folder to save the validation files
+                    reward_cutoff: reward cutoff to determine when to stop the mutation
+                    unique_path_to_give_for_file: unique path to give for the file to avoid overwriting
+                    sequence_encoding_type: type of sequence encoding to use (esm or biovec)
+                    secondary_structure_to_disrupt: secondary structure to disrupt (default is helix)
+                    maximum_number_of_allowed_mutations_per_episode: maximum number of mutations allowed per episode (default is 15)
+                    validation: whether to use the environment for validation or not (default is False)
+                    use_proline: whether to use proline in the amino acid substitutions (default is True)
+                    use_plddt_in_reward: whether to use pLDDT in reward calculation (default is False)
+                    distance_cutoff: distance cutoff for neighbor counting (default is 6.0)
+                    chain_id: chain ID to consider for neighbor counting (default is 'A')
+                    total_episodes: total number of episodes for training (default is None)
+                    
+                '''
                 # this selects the folder in which we have the PDBs that we can use to Train. 
                 dataframe_of_dataset = pd.read_csv(file_containing_sequence_database)
                 keyword_to_choose = 'training' if validation == False else 'validate'
@@ -96,6 +115,10 @@ class ProteinEvolution(Env):
 
                 self.starting_residue_in_protein = self.row_of_template_sequence['starting_residue'].values[0]
                 self.ending_residue_in_protein = self.row_of_template_sequence['ending_residue'].values[0]
+
+                self.distance_cutoff = distance_cutoff
+                self.chain_id = chain_id
+                self.total_episodes = total_episodes
                 
                 self.pre_helix_of_protein = self.entire_initial_protein_sequence[:self.starting_residue_in_protein]
                 self.post_helix_of_protein = self.entire_initial_protein_sequence[self.ending_residue_in_protein+1:]
@@ -127,28 +150,34 @@ class ProteinEvolution(Env):
         # Reward
 
         if self.use_environment_for_validation == False:
-            reward = reward_function(template_protein_structure_path=self.path_of_template_pdb_file,
-                                    protein_sequence=mutated_whole_protein_sequence,
-                                    reward_cutoff=self.cutoff_for_the_reward,
-                                    unique_name_to_give=self.unique_path_to_give_for_file,
-                                    starting_residue_id = self.starting_residue_in_protein,
-                                    ending_residue_id = self.ending_residue_in_protein,
-                                    secondary_structure_type_from_env =self.secondary_structure_to_disrupt,
-                                    validation=False,
-                                    folder_to_save_validation_files=None,
-                                    use_plddt=self.use_plddt_in_reward_calculation)
+            reward = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
+                                                    reward_cutoff_sheet=self.cutoff_for_the_reward,
+                                                    unique_name_to_give=self.unique_path_to_give_for_file,
+                                                    starting_residue_id = self.starting_residue_in_protein,
+                                                    ending_residue_id = self.ending_residue_in_protein,
+                                                    template_protein_structure_path=self.path_of_template_pdb_file,
+                                                    secondary_structure_type_from_env =self.secondary_structure_to_disrupt,
+                                                    validation=False,
+                                                    folder_to_save_validation_files=None,
+                                                    use_plddt=self.use_plddt_in_reward_calculation,
+                                                    distance_cutoff=self.distance_cutoff,
+                                                    chain_id=self.chain_id,
+                                                    total_episodes=self.total_episodes)
             
         if self.use_environment_for_validation == True:
-            reward = reward_function(template_protein_structure_path=self.path_of_template_pdb_file,
-                                    protein_sequence=mutated_whole_protein_sequence,
-                                    reward_cutoff=self.cutoff_for_the_reward,
-                                    unique_name_to_give=self.unique_path_to_give_for_file,
-                                    starting_residue_id = self.starting_residue_in_protein,
-                                    ending_residue_id = self.ending_residue_in_protein,
-                                    secondary_structure_type_from_env =self.secondary_structure_to_disrupt,
-                                    validation=True,
-                                    folder_to_save_validation_files=self.folder_to_save_validation_files,
-                                    use_plddt=self.use_plddt_in_reward_calculation)
+            reward = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
+                                                    reward_cutoff_sheet=self.cutoff_for_the_reward,
+                                                    unique_name_to_give=self.unique_path_to_give_for_file,
+                                                    starting_residue_id = self.starting_residue_in_protein,
+                                                    ending_residue_id = self.ending_residue_in_protein,
+                                                    template_protein_structure_path=self.path_of_template_pdb_file,
+                                                    secondary_structure_type_from_env =self.secondary_structure_to_disrupt,
+                                                    validation=True,
+                                                    folder_to_save_validation_files=None,
+                                                    use_plddt=self.use_plddt_in_reward_calculation,
+                                                    distance_cutoff=self.distance_cutoff,
+                                                    chain_id=self.chain_id,
+                                                    total_episodes=self.total_episodes)
 
         if reward != 10 and self.number_of_mutations < self.maximum_number_of_allowed_mutations_per_episode:
             actual_reward = reward

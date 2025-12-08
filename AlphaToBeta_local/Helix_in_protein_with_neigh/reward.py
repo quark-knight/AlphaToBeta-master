@@ -12,6 +12,7 @@ import csv # for writing/reading amino acid frequency to a csv file
 import numpy as np 
 import biotite.structure as struc # biotite is used for secondary structure annotation
 import biotite.structure.io as strucio # for reading the PDB files
+from typing import Union, Tuple, Optional # for type annotations and hinting
 from transformers import AutoTokenizer, EsmForProteinFolding  # ESM model from huggingface
 from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OFProtein # OpenFold utils
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37 # OpenFold utils
@@ -461,7 +462,7 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\\/:*?"<>|\x00-\x1F]', "_", name)
 
 def reward_function_with_env_counts(protein_sequence:                               str,
-                                    reward_cutoff_sheet:                            float| tuple[float, float],
+                                    reward_cutoff_sheet:                            Union[float, Tuple[float, float]],
                                     unique_name_to_give:                            str,
                                     starting_residue_id:                            int,
                                     ending_residue_id:                              int,
@@ -472,7 +473,7 @@ def reward_function_with_env_counts(protein_sequence:                           
                                     use_plddt:                                      bool = False,
                                     distance_cutoff:                                float=6.0,
                                     chain_id:                                       str='A',
-                                    total_episodes:                                 int | None = None
+                                    total_episodes:                                 Optional[int] = None
 )-> Tuple[float, Optional[np.ndarray]]:
     '''
     This function is used to calculate the reward based on the percentage of a specified secondary structure type in a segment of a protein.

@@ -1,0 +1,35 @@
+-rwxr-xr-x 1 root root 1183448 Apr 18  2022 /usr/bin/bash
+/usr/bin/bash
+-rwxr-xr-x 1 root root 43352 Sep  5  2019 /usr/bin/env
+/usr/bin/bash
+Running on host:
+cn17
+User: aditya
+Home: /home/aditya
+/home/aditya/mambaforge/envs/AlphaToBeta/bin/python
+Python 3.9.23
+/usr/bin/nvidia-smi
+Mon Dec  8 17:50:30 2025       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.247.01             Driver Version: 535.247.01   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA A30                     Off | 00000000:4B:00.0 Off |                    0 |
+| N/A   28C    P0              29W / 165W |      3MiB / 24576MiB |      0%      Default |
+|                                         |                      |             Disabled |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+Torch: 2.5.1
+CUDA: 12.4
+Avail: True
+GPU: NVIDIA A30

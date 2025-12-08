@@ -1,0 +1,9 @@
+/var/spool/slurm/slurmd/job129319/slurm_script: line 14: use-mambaforge: command not found
+/var/spool/slurm/slurmd/job129319/slurm_script: line 16: cd: /storage/arnab/Aditya/AlphaToBeta_synced: No such file or directory
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/storage/arnab/Aditya/AlphaMut-master/AlphaToBeta_synced/Helix_in_protein/__init__.py", line 1, in <module>
+    from .encoder_decoder import *
+  File "/storage/arnab/Aditya/AlphaMut-master/AlphaToBeta_synced/Helix_in_protein/encoder_decoder.py", line 3, in <module>
+    from transformers import AutoTokenizer,EsmModel
+ModuleNotFoundError: No module named 'transformers'

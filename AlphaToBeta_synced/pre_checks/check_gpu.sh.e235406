@@ -1,0 +1,13 @@
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t6_8M_UR50D and are newly initialized: ['pooler.dense.bias', 'pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmForProteinFolding were not initialized from the model checkpoint at facebook/esmfold_v1 and are newly initialized: ['esm.contact_head.regression.bias', 'esm.contact_head.regression.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/storage/aditya/AlphaMut-master/AlphaToBeta_synced/Helix_in_protein_with_neigh/__init__.py", line 3, in <module>
+    from .environment import *
+  File "/storage/aditya/AlphaMut-master/AlphaToBeta_synced/Helix_in_protein_with_neigh/environment.py", line 6, in <module>
+    from Helix_in_protein_with_neigh.reward import *
+  File "/storage/aditya/AlphaMut-master/AlphaToBeta_synced/Helix_in_protein_with_neigh/reward.py", line 464, in <module>
+    reward_cutoff_sheet:                            float| tuple[float, float],
+TypeError: unsupported operand type(s) for |: 'type' and 'types.GenericAlias'

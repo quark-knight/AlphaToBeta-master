@@ -30,7 +30,7 @@ from stable_baselines3.common.results_plotter import load_results, ts2xy
 
 # Multiplier for total episodes
 multiplier_for_episodes = 1
-total_episodes = int(14000)*multiplier_for_episodes
+total_episodes = int(14)*multiplier_for_episodes
 # Create log dir
 log_dir = "AtoB_ppo_training_log_whole_protein"
 os.makedirs(log_dir, exist_ok=True)
@@ -46,6 +46,7 @@ env = Helix_in_protein_with_neigh.ProteinEvolution( file_containing_sequence_dat
                                                     secondary_structure_to_disrupt='both',
                                                     maximum_number_of_allowed_mutations_per_episode=15,
                                                     use_proline=True,
+                                                    use_plddt_in_reward=False,
                                                     distance_cutoff=6.0,
                                                     chain_id='A',
                                                     total_episodes=total_episodes)

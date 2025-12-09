@@ -13,6 +13,7 @@ import numpy as np
 import biotite.structure as struc # biotite is used for secondary structure annotation
 import biotite.structure.io as strucio # for reading the PDB files
 from typing import Union, Tuple, Optional # for type annotations and hinting
+from numbers import Integral # for type checking of integers, int != Integral or numpy.int64 or tensor.int32
 from transformers import AutoTokenizer, EsmForProteinFolding  # ESM model from huggingface
 from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OFProtein # OpenFold utils
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37 # OpenFold utils
@@ -161,8 +162,9 @@ def percentage_of_secondary_structure(arr,secondary_structure_type,starting_resi
     if secondary_structure_type not in ['helix', 'sheet', 'both']:
         raise ValueError("secondary_structure_type must be 'helix', 'sheet', or 'both'")
     
+    print(type(starting_residue), type(ending_residue))
     # Validate residue indices
-    if not isinstance(starting_residue, int) or not isinstance(ending_residue, int):
+    if not isinstance(starting_residue, Integral) or not isinstance(ending_residue, Integral):
         raise TypeError("Residue indices must be integers")
     
     # validate non-negative indices
@@ -373,7 +375,11 @@ def count_aa_within_cutoff(pdb_path,
     return aa_counts
 
 
-def get_reward_from_resultant_pct(result_pct_got, result_plddt,cutoff=70,usage_of_plddt=False)->float:
+def get_reward_from_resultant_pct(result_pct_got: Union[float, Tuple[float, float]],
+                                  result_plddt:   Optional[float]=None,
+                                  cutoff:         float=70,
+                                  usage_of_plddt: bool=False
+                                  )->float:
     '''
     Decide reward based on helix vs sheet content. It takes in a secondary stucture percentage cutoff and gives back the reward, 
     after looking at the result, which is the percentage content of the secondary structure. 
@@ -551,6 +557,10 @@ def reward_function_with_env_counts(protein_sequence:                           
         else:
             helix_or_sheet_pct = resultant_a_and_b_percentage
 
+        # Debugging line
+        if helix_pct<sheet_pct:
+            print(f"Episode {episode}: Helix%={helix_pct:.2f}, Sheet%={sheet_pct:.2f}")
+
         # Optional: Calculates the fraction of residues in plDDT >= 0.7 only if the use_plddt flag is True
         if use_plddt:
             results_above_plddt_limit = plddt_value_of_helical_residues(structure_path= path_to_the_predicted_sturcture_file, 
@@ -559,9 +569,15 @@ def reward_function_with_env_counts(protein_sequence:                           
             # Calculates the fraction of residues in plDDT >= 0.7 only if the use_plddt flag is True
 
     # 3) Reward based on helix vs sheet
-        reward = get_reward_from_resultant_pct(helix_or_sheet_pct,
-                                               result_plddt=results_above_plddt_limit,
-                                               cutoff_sheet=reward_cutoff_sheet)
+        if use_plddt:
+            reward = get_reward_from_resultant_pct(resultant_a_and_b_percentage,
+                                                   result_plddt=results_above_plddt_limit,
+                                                   cutoff_sheet=reward_cutoff_sheet,
+                                                   usage_of_plddt=use_plddt)
+        else:
+            reward = get_reward_from_resultant_pct(resultant_a_and_b_percentage,
+                                                   cutoff=reward_cutoff_sheet, 
+                                                   usage_of_plddt=use_plddt)
 
     # 4) If sheet dominates, fill the 20-aa frequency array from neighborhood
         aa_counts = None

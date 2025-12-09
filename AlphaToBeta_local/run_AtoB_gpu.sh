@@ -1,9 +1,10 @@
 #!/usr/bin/bash
 #SBATCH --job-name=AtoB      
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2                # number of GPUs
-#SBATCH --time=192:00:00            # time (HH:MM:SS)
-#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:1                  # number of GPUs
+#SBATCH --exclusive                   # exclusive node access
+#SBATCH --time=192:00:00              # time (HH:MM:SS)
+#SBATCH --ntasks-per-node=1
 #SBATCH --partition=iiser
 #SBATCH -D /storage/aditya/AlphaToBeta_synced
 #SBATCH --error=outputs/%x_%j.err
@@ -55,22 +56,13 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}" # so 'import Helix_in_protein' works fr
 # export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
 
 # -------- 5) Run --------
+# Going to work dir
+cd /storage/aditya/AlphaMut-master/AlphaToBeta_synced
+
 echo "[$(date)] Starting AlphaToBeta.py ..."
 # Use srun for proper Slurm accounting
 srun python AlphaToBeta.py
 echo "[$(date)] Finished AlphaToBeta.py."
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -150,7 +150,7 @@ class ProteinEvolution(Env):
         # Reward
 
         if self.use_environment_for_validation == False:
-            reward = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
+            reward,aa_counts = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
                                                     reward_cutoff_sheet=self.cutoff_for_the_reward,
                                                     unique_name_to_give=self.unique_path_to_give_for_file,
                                                     starting_residue_id = self.starting_residue_in_protein,
@@ -165,7 +165,7 @@ class ProteinEvolution(Env):
                                                     total_episodes=self.total_episodes)
             
         if self.use_environment_for_validation == True:
-            reward = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
+            reward,aa_counts = reward_function_with_env_counts(protein_sequence=mutated_whole_protein_sequence,
                                                     reward_cutoff_sheet=self.cutoff_for_the_reward,
                                                     unique_name_to_give=self.unique_path_to_give_for_file,
                                                     starting_residue_id = self.starting_residue_in_protein,

@@ -162,7 +162,6 @@ def percentage_of_secondary_structure(arr,secondary_structure_type,starting_resi
     if secondary_structure_type not in ['helix', 'sheet', 'both']:
         raise ValueError("secondary_structure_type must be 'helix', 'sheet', or 'both'")
     
-    print(type(starting_residue), type(ending_residue))
     # Validate residue indices
     if not isinstance(starting_residue, Integral) or not isinstance(ending_residue, Integral):
         raise TypeError("Residue indices must be integers")

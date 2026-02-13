@@ -7,8 +7,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --partition=iiser
 #SBATCH -D /storage/aditya/AlphaToBeta_synced
-#SBATCH --error=outputs/%x_%j.err
-#SBATCH --output=outputs/%x_%j.out
+#SBATCH --error=%x_%j.err
+#SBATCH --output=%x_%j.out
 
 
 set -euo pipefail

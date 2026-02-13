@@ -410,7 +410,7 @@ def get_reward_from_resultant_pct(result_pct_got: Union[float, Tuple[float, floa
                 return -0.01
             elif sheet_pct > helix_pct and sheet_pct < cutoff:
             # Case 2: sheet dominates but below cutoff
-                return 5 #changing this to 0.1 to make it learn this behaviour more than Case 1, old reward was 0.01
+                return 0.1 #changing this to 0.1 to make it learn this behaviour more than Case 1, old reward was 0.01
             elif sheet_pct >= cutoff and sheet_pct > helix_pct:
             # Case 3: sheet dominates and exceeds cutoff
                 return 10.0
@@ -423,7 +423,7 @@ def get_reward_from_resultant_pct(result_pct_got: Union[float, Tuple[float, floa
                 return -0.01
             elif sheet_pct > helix_pct and sheet_pct < cutoff and result_plddt >= cutoff:
             # Case 2: sheet dominates but below cutoff and pLDDT is acceptable
-                return 5 #changing this to 0.1 to make it learn this behaviour more than Case 1, old reward was 0.01
+                return 0.1 #changing this to 0.1 to make it learn this behaviour more than Case 1, old reward was 0.01
             elif sheet_pct >= cutoff and sheet_pct > helix_pct and result_plddt >= cutoff:
             # Case 3: sheet dominates and exceeds cutoff and pLDDT is acceptable
                 return 10.0
